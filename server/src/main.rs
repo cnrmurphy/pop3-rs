@@ -30,9 +30,29 @@ enum SessionState {
 enum Command {
     Apop,
     Noop,
-    Pass,
+    Pass(String),
     Quit,
-    User,
+    User(String),
+}
+
+impl Command {
+    fn parse(input: &str) -> Result<Command, StatusIndicator> {
+        let parts: Vec<&str> = input.split_whitespace().collect();
+        match parts.first().map(|s| s.to_uppercase()).as_deref() {
+            Some("USER") => match parts.get(1) {
+                Some(username) => Ok(Command::User(username.to_string())),
+                None => Err(StatusIndicator::Err("USER requires username".to_string())),
+            },
+            Some("PASS") => match parts.get(1) {
+                Some(password) => Ok(Command::Pass(password.to_string())),
+                None => Err(StatusIndicator::Err("USER requires username".to_string())),
+            },
+            Some("APOP") => Ok(Command::Apop),
+            Some("NOOP") => Ok(Command::Noop),
+            Some("QUIT") => Ok(Command::Quit),
+            _ => Err(StatusIndicator::Err("Unknown command".to_string())),
+        }
+    }
 }
 
 pub struct Session {
@@ -68,12 +88,58 @@ async fn process(mut stream: TcpStream) -> IOResult<()> {
 
     loop {
         line.clear();
-        let bytes_read = reader.read_line(&mut line).await?;
-
-        if bytes_read == 0 {
-            break;
+        reader.read_line(&mut line).await?;
+        match Command::parse(line.trim()) {
+            Ok(cmd) => {
+                match cmd {
+                    Command::Apop => {
+                        let resp = StatusIndicator::Ok("APOP".to_string());
+                        writer.write(resp.to_string().as_bytes()).await?;
+                        writer.flush().await?;
+                    }
+                    Command::User(username) => {
+                        if !matches!(session.state, SessionState::Authorization) {
+                            let resp = StatusIndicator::Err(
+                                "Session not in Authorization state ".to_string(),
+                            );
+                            writer.write(resp.to_string().as_bytes()).await?;
+                            writer.flush().await?;
+                        }
+                        let resp = StatusIndicator::Ok("User accepted".to_string());
+                        writer.write(resp.to_string().as_bytes()).await?;
+                        writer.flush().await?;
+                    }
+                    Command::Pass(password) => {
+                        if !matches!(session.state, SessionState::Authorization) {
+                            let resp = StatusIndicator::Err(
+                                "Session not in Authorization state ".to_string(),
+                            );
+                            writer.write(resp.to_string().as_bytes()).await?;
+                            writer.flush().await?;
+                        }
+                        let resp = StatusIndicator::Ok("Password accepted".to_string());
+                        writer.write(resp.to_string().as_bytes()).await?;
+                        writer.flush().await?;
+                    }
+                    Command::Noop => {
+                        let resp = StatusIndicator::Ok("NOOP".to_string());
+                        writer.write(resp.to_string().as_bytes()).await?;
+                        writer.flush().await?;
+                    }
+                    Command::Quit => {
+                        let resp = StatusIndicator::Ok("Bye!".to_string());
+                        // TODO: clear session state
+                        writer.write(resp.to_string().as_bytes()).await?;
+                        writer.flush().await?;
+                        return Ok(());
+                    }
+                }
+            }
+            Err(e) => {
+                println!("{}", e.to_string());
+                writer.write(e.to_string().as_bytes()).await?;
+                writer.flush().await?;
+            }
         }
     }
-
-    Ok(())
 }
