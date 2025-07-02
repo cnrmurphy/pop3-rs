@@ -91,48 +91,11 @@ async fn process(mut stream: TcpStream) -> IOResult<()> {
         reader.read_line(&mut line).await?;
         match Command::parse(line.trim()) {
             Ok(cmd) => {
-                match cmd {
-                    Command::Apop => {
-                        let resp = StatusIndicator::Ok("APOP".to_string());
-                        writer.write(resp.to_string().as_bytes()).await?;
-                        writer.flush().await?;
-                    }
-                    Command::User(username) => {
-                        if !matches!(session.state, SessionState::Authorization) {
-                            let resp = StatusIndicator::Err(
-                                "Session not in Authorization state ".to_string(),
-                            );
-                            writer.write(resp.to_string().as_bytes()).await?;
-                            writer.flush().await?;
-                        }
-                        let resp = StatusIndicator::Ok("User accepted".to_string());
-                        writer.write(resp.to_string().as_bytes()).await?;
-                        writer.flush().await?;
-                    }
-                    Command::Pass(password) => {
-                        if !matches!(session.state, SessionState::Authorization) {
-                            let resp = StatusIndicator::Err(
-                                "Session not in Authorization state ".to_string(),
-                            );
-                            writer.write(resp.to_string().as_bytes()).await?;
-                            writer.flush().await?;
-                        }
-                        let resp = StatusIndicator::Ok("Password accepted".to_string());
-                        writer.write(resp.to_string().as_bytes()).await?;
-                        writer.flush().await?;
-                    }
-                    Command::Noop => {
-                        let resp = StatusIndicator::Ok("NOOP".to_string());
-                        writer.write(resp.to_string().as_bytes()).await?;
-                        writer.flush().await?;
-                    }
-                    Command::Quit => {
-                        let resp = StatusIndicator::Ok("Bye!".to_string());
-                        // TODO: clear session state
-                        writer.write(resp.to_string().as_bytes()).await?;
-                        writer.flush().await?;
-                        return Ok(());
-                    }
+                let should_quit = matches!(cmd, Command::Quit);
+                let resp = handle_command(cmd, &mut session);
+                send_response(&mut writer, resp).await?;
+                if should_quit {
+                    return Ok(());
                 }
             }
             Err(e) => {
@@ -140,6 +103,38 @@ async fn process(mut stream: TcpStream) -> IOResult<()> {
                 writer.write(e.to_string().as_bytes()).await?;
                 writer.flush().await?;
             }
+        }
+    }
+}
+
+async fn send_response(
+    writer: &mut BufWriter<tokio::net::tcp::WriteHalf<'_>>,
+    resp: StatusIndicator,
+) -> IOResult<()> {
+    writer.write(resp.to_string().as_bytes()).await?;
+    writer.flush().await?;
+    Ok(())
+}
+
+fn handle_command(cmd: Command, session: &mut Session) -> StatusIndicator {
+    match cmd {
+        Command::Apop => StatusIndicator::Ok("APOP".to_string()),
+        Command::User(username) => {
+            if !matches!(session.state, SessionState::Authorization) {
+                StatusIndicator::Err("Session not in Authorization state ".to_string());
+            }
+            StatusIndicator::Ok("User accepted".to_string())
+        }
+        Command::Pass(password) => {
+            if !matches!(session.state, SessionState::Authorization) {
+                StatusIndicator::Err("Session not in Authorization state ".to_string());
+            }
+            StatusIndicator::Ok("Password accepted".to_string())
+        }
+        Command::Noop => StatusIndicator::Ok("NOOP".to_string()),
+        Command::Quit => {
+            StatusIndicator::Ok("Bye!".to_string())
+            // TODO: clear session state
         }
     }
 }
