@@ -21,6 +21,7 @@ impl std::fmt::Display for StatusIndicator {
     }
 }
 
+#[derive(Debug)]
 enum SessionState {
     Authorization,
     Update,
@@ -55,6 +56,7 @@ impl Command {
     }
 }
 
+#[derive(Debug)]
 pub struct Session {
     state: SessionState,
 }
@@ -87,6 +89,7 @@ async fn process(mut stream: TcpStream) -> IOResult<()> {
     let mut line = String::new();
 
     loop {
+        println!("{:?}", session);
         line.clear();
         reader.read_line(&mut line).await?;
         match Command::parse(line.trim()) {
@@ -121,14 +124,15 @@ fn handle_command(cmd: Command, session: &mut Session) -> StatusIndicator {
         Command::Apop => StatusIndicator::Ok("APOP".to_string()),
         Command::User(username) => {
             if !matches!(session.state, SessionState::Authorization) {
-                StatusIndicator::Err("Session not in Authorization state ".to_string());
+                return StatusIndicator::Err("Session not in Authorization state ".to_string());
             }
             StatusIndicator::Ok("User accepted".to_string())
         }
         Command::Pass(password) => {
             if !matches!(session.state, SessionState::Authorization) {
-                StatusIndicator::Err("Session not in Authorization state ".to_string());
+                return StatusIndicator::Err("Session not in Authorization state ".to_string());
             }
+            session.state = SessionState::Transaction;
             StatusIndicator::Ok("Password accepted".to_string())
         }
         Command::Noop => StatusIndicator::Ok("NOOP".to_string()),
