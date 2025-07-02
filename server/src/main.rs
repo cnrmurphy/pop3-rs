@@ -12,6 +12,15 @@ enum StatusIndicator {
     Err(String),
 }
 
+impl std::fmt::Display for StatusIndicator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StatusIndicator::Ok(msg) => write!(f, "+OK {}\r\n", msg),
+            StatusIndicator::Err(msg) => write!(f, "-ERR {}\r\n", msg),
+        }
+    }
+}
+
 enum SessionState {
     Authorization,
     Update,
@@ -48,7 +57,8 @@ async fn process(mut stream: TcpStream) -> IOResult<()> {
     let mut reader = BufReader::new(reader);
     let mut writer = BufWriter::new(writer);
     println!("writing greeting");
-    writer.write("+OK POP3 server ready\r\n".as_bytes()).await?;
+    let greeting = StatusIndicator::Ok("POP3 server ready".to_string());
+    writer.write(greeting.to_string().as_bytes()).await?;
     writer.flush().await?;
 
     let mut session = Session {
