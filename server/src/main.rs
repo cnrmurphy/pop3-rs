@@ -59,6 +59,7 @@ impl Command {
 #[derive(Debug)]
 pub struct Session {
     state: SessionState,
+    user: Option<String>,
 }
 
 #[tokio::main]
@@ -85,6 +86,7 @@ async fn process(mut stream: TcpStream) -> IOResult<()> {
 
     let mut session = Session {
         state: SessionState::Authorization,
+        user: None,
     };
     let mut line = String::new();
 
@@ -126,19 +128,28 @@ fn handle_command(cmd: Command, session: &mut Session) -> StatusIndicator {
             if !matches!(session.state, SessionState::Authorization) {
                 return StatusIndicator::Err("Session not in Authorization state ".to_string());
             }
+            session.user = Some(username);
             StatusIndicator::Ok("User accepted".to_string())
         }
         Command::Pass(password) => {
             if !matches!(session.state, SessionState::Authorization) {
                 return StatusIndicator::Err("Session not in Authorization state ".to_string());
             }
+            if session.user.is_none() {
+                return StatusIndicator::Err("No username set - send USER first".to_string());
+            }
             session.state = SessionState::Transaction;
             StatusIndicator::Ok("Password accepted".to_string())
         }
         Command::Noop => StatusIndicator::Ok("NOOP".to_string()),
         Command::Quit => {
+            // Only when the session state is in the TRANSACTION state does the state need to be
+            // set to the UPDATE state when the QUIT command is issued!
+            if matches!(session.state, SessionState::Transaction) {
+                session.state = SessionState::Update;
+            }
+            // TODO: release resources
             StatusIndicator::Ok("Bye!".to_string())
-            // TODO: clear session state
         }
     }
 }
