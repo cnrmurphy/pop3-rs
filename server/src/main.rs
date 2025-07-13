@@ -72,18 +72,38 @@ impl Drop for MailboxLock {
 
 #[tokio::main]
 async fn main() {
+    let args: Vec<String> = std::env::args().collect();
     let db = sled::open("my_db").unwrap();
+
+    // TODO: we might want to implement an independent helper cli at some point
+    if args.len() >= 2 && args[1] == "add-user" {
+        if args.len() != 4 {
+            eprintln!("Usage: {} add-user <username> <password>", args[0]);
+            std::process::exit(1);
+        }
+
+        let auth_store = auth::AuthStore::new(db);
+
+        match auth_store.create_user(&args[2], &args[3]) {
+            Ok(true) => println!("User '{}' created successfully", args[2]),
+            Ok(false) => println!("User '{}' already exists", args[2]),
+            Err(e) => eprintln!("Error creating user: {}", e),
+        }
+        return;
+    }
+
     let auth = Arc::new(auth::AuthStore::new(db));
     let session_manager = Arc::new(SessionManager::new());
     let listener = TcpListener::bind("127.0.0.1:1110").await.unwrap();
 
+    println!("Mail server listening on 127.0.0.1:1110");
     loop {
         let (stream, _addr) = listener.accept().await.unwrap();
         let session_manager = Arc::clone(&session_manager);
         let auth_store = Arc::clone(&auth);
         println!("new connection");
         tokio::spawn(async move {
-            process(stream, session_manager, auth_store).await;
+            let _ = process(stream, session_manager, auth_store).await;
         });
     }
 }
