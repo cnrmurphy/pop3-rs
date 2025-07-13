@@ -1,3 +1,5 @@
+pub mod auth;
+pub mod maildir;
 pub mod protocol;
 
 use std::{
@@ -10,6 +12,8 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter},
     net::{TcpListener, TcpStream},
 };
+
+use crate::auth::AuthStore;
 
 pub type IOResult<T> = std::io::Result<T>;
 
@@ -68,20 +72,27 @@ impl Drop for MailboxLock {
 
 #[tokio::main]
 async fn main() {
+    let db = sled::open("my_db").unwrap();
+    let auth = Arc::new(auth::AuthStore::new(db));
     let session_manager = Arc::new(SessionManager::new());
     let listener = TcpListener::bind("127.0.0.1:1110").await.unwrap();
 
     loop {
-        let (stream, addr) = listener.accept().await.unwrap();
+        let (stream, _addr) = listener.accept().await.unwrap();
         let session_manager = Arc::clone(&session_manager);
+        let auth_store = Arc::clone(&auth);
         println!("new connection");
         tokio::spawn(async move {
-            process(stream, session_manager).await;
+            process(stream, session_manager, auth_store).await;
         });
     }
 }
 
-async fn process(mut stream: TcpStream, session_manager: Arc<SessionManager>) -> IOResult<()> {
+async fn process(
+    mut stream: TcpStream,
+    session_manager: Arc<SessionManager>,
+    auth_store: Arc<AuthStore>,
+) -> IOResult<()> {
     let (reader, writer) = stream.split();
     let mut reader = BufReader::new(reader);
     let mut writer = BufWriter::new(writer);
@@ -103,7 +114,7 @@ async fn process(mut stream: TcpStream, session_manager: Arc<SessionManager>) ->
         match Command::parse(line.trim()) {
             Ok(cmd) => {
                 let should_quit = matches!(cmd, Command::Quit);
-                let resp = handle_command(cmd, &mut session, &session_manager);
+                let resp = handle_command(cmd, &mut session, &session_manager, &auth_store);
                 send_response(&mut writer, resp).await?;
                 if should_quit {
                     return Ok(());
@@ -131,6 +142,7 @@ fn handle_command(
     cmd: Command,
     session: &mut Session,
     session_manager: &Arc<SessionManager>,
+    auth_store: &Arc<AuthStore>,
 ) -> StatusIndicator {
     match cmd {
         Command::Apop => StatusIndicator::Ok("APOP".to_string()),
@@ -149,13 +161,26 @@ fn handle_command(
                 return StatusIndicator::Err("No username set - send USER first".to_string());
             }
             let username = session.user.as_ref().unwrap();
-            match session_manager.try_lock_mailbox(username, Arc::clone(session_manager)) {
-                Ok(lock) => {
-                    session.state = SessionState::Transaction;
-                    session.mailbox_lock = Some(lock);
-                    StatusIndicator::Ok("Pass accepted".to_string())
+            match auth_store.login(username, &password) {
+                Ok(success) => {
+                    if !success {
+                        return StatusIndicator::Err(
+                            "Username or password are incorrect".to_string(),
+                        );
+                    }
+                    match session_manager.try_lock_mailbox(username, Arc::clone(session_manager)) {
+                        Ok(lock) => {
+                            session.state = SessionState::Transaction;
+                            session.mailbox_lock = Some(lock);
+                            StatusIndicator::Ok("Pass accepted".to_string())
+                        }
+                        Err(_) => StatusIndicator::Err("Mailbox already in use".to_string()),
+                    }
                 }
-                Err(_) => StatusIndicator::Err("Mailbox already in use".to_string()),
+                Err(e) => {
+                    println!("{}", e);
+                    StatusIndicator::Err("Username or password are incorrect".to_string())
+                }
             }
         }
         Command::Noop => StatusIndicator::Ok("NOOP".to_string()),
