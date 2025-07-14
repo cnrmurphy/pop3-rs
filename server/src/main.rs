@@ -13,7 +13,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
-use crate::auth::AuthStore;
+use crate::{auth::AuthStore, maildir::MailDir};
 
 pub type IOResult<T> = std::io::Result<T>;
 
@@ -21,7 +21,6 @@ const PORT: u16 = 110;
 
 pub struct Session {
     state: SessionState,
-    user: Option<String>,
     mailbox_lock: Option<MailboxLock>,
 }
 
@@ -85,7 +84,10 @@ async fn main() {
         let auth_store = auth::AuthStore::new(db);
 
         match auth_store.create_user(&args[2], &args[3]) {
-            Ok(true) => println!("User '{}' created successfully", args[2]),
+            Ok(true) => {
+                maildir::init_user_mailbox(&args[2]).unwrap();
+                println!("User '{}' created successfully", args[2])
+            }
             Ok(false) => println!("User '{}' already exists", args[2]),
             Err(e) => eprintln!("Error creating user: {}", e),
         }
@@ -123,7 +125,6 @@ async fn process(
 
     let mut session = Session {
         state: SessionState::Authorization,
-        user: None,
         mailbox_lock: None,
     };
     let mut line = String::new();
@@ -170,48 +171,56 @@ fn handle_command(
             if !matches!(session.state, SessionState::Authorization) {
                 return StatusIndicator::Err("Session not in Authorization state ".to_string());
             }
-            session.user = Some(username);
+            session.state = SessionState::AuthorizationWithUser(username.to_string());
             StatusIndicator::Ok("User accepted".to_string())
         }
-        Command::Pass(password) => {
-            if !matches!(session.state, SessionState::Authorization) {
-                return StatusIndicator::Err("Session not in Authorization state ".to_string());
-            }
-            if session.user.is_none() {
-                return StatusIndicator::Err("No username set - send USER first".to_string());
-            }
-            let username = session.user.as_ref().unwrap();
-            match auth_store.login(username, &password) {
-                Ok(success) => {
-                    if !success {
-                        return StatusIndicator::Err(
-                            "Username or password are incorrect".to_string(),
-                        );
-                    }
-                    match session_manager.try_lock_mailbox(username, Arc::clone(session_manager)) {
-                        Ok(lock) => {
-                            session.state = SessionState::Transaction;
-                            session.mailbox_lock = Some(lock);
-                            StatusIndicator::Ok("Pass accepted".to_string())
+        Command::Pass(password) => match &session.state {
+            SessionState::AuthorizationWithUser(username) => {
+                match auth_store.login(username, &password) {
+                    Ok(success) => {
+                        if !success {
+                            return StatusIndicator::Err(
+                                "Username or password are incorrect".to_string(),
+                            );
                         }
-                        Err(_) => StatusIndicator::Err("Mailbox already in use".to_string()),
+                        match session_manager
+                            .try_lock_mailbox(username, Arc::clone(session_manager))
+                        {
+                            Ok(lock) => {
+                                session.state = SessionState::Transaction(username.to_string());
+                                session.mailbox_lock = Some(lock);
+                                StatusIndicator::Ok("Pass accepted".to_string())
+                            }
+                            Err(_) => StatusIndicator::Err("Mailbox already in use".to_string()),
+                        }
+                    }
+                    Err(e) => {
+                        println!("{}", e);
+                        StatusIndicator::Err("Username or password are incorrect".to_string())
                     }
                 }
-                Err(e) => {
-                    println!("{}", e);
-                    StatusIndicator::Err("Username or password are incorrect".to_string())
-                }
             }
-        }
+            _ => StatusIndicator::Err("No username set - send USER first".to_string()),
+        },
+        Command::List => match &session.state {
+            SessionState::Transaction(username) => {
+                let messages = MailDir::list_messages(username);
+                println!("{} messages", messages.len());
+                StatusIndicator::Ok(format!("{} messages", messages.len()))
+            }
+            _ => StatusIndicator::Err("Session not in Transaction state ".to_string()),
+        },
         Command::Noop => StatusIndicator::Ok("NOOP".to_string()),
         Command::Quit => {
             // Only when the session state is in the TRANSACTION state does the state need to be
             // set to the UPDATE state when the QUIT command is issued!
-            if matches!(session.state, SessionState::Transaction) {
-                session.state = SessionState::Update;
+            match &session.state {
+                SessionState::Transaction(username) => {
+                    session.state = SessionState::Update(username.to_string());
+                    StatusIndicator::Ok("Bye!".to_string())
+                }
+                _ => StatusIndicator::Ok("Bye!".to_string()),
             }
-            // TODO: release resources
-            StatusIndicator::Ok("Bye!".to_string())
         }
     }
 }

@@ -15,8 +15,9 @@ impl std::fmt::Display for StatusIndicator {
 #[derive(Debug)]
 pub enum SessionState {
     Authorization,
-    Update,
-    Transaction,
+    AuthorizationWithUser(String),
+    Update(String),
+    Transaction(String),
 }
 
 pub enum Command {
@@ -25,6 +26,7 @@ pub enum Command {
     Pass(String),
     Quit,
     User(String),
+    List,
 }
 
 impl Command {
@@ -41,6 +43,7 @@ impl Command {
             },
             Some("APOP") => Ok(Command::Apop),
             Some("NOOP") => Ok(Command::Noop),
+            Some("LIST") => Ok(Command::List),
             Some("QUIT") => Ok(Command::Quit),
             _ => Err(StatusIndicator::Err("Unknown command".to_string())),
         }
