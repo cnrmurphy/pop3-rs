@@ -168,7 +168,10 @@ fn handle_command(
     match cmd {
         Command::Apop => StatusIndicator::Ok("APOP".to_string()),
         Command::User(username) => {
-            if !matches!(session.state, SessionState::Authorization) {
+            if !matches!(
+                session.state,
+                SessionState::Authorization | SessionState::AuthorizationWithUser(_)
+            ) {
                 return StatusIndicator::Err("Session not in Authorization state ".to_string());
             }
             session.state = SessionState::AuthorizationWithUser(username.to_string());
@@ -204,9 +207,20 @@ fn handle_command(
         },
         Command::List => match &session.state {
             SessionState::Transaction(username) => {
+                let mut resp = String::new();
+                let mut count = 1;
+                let mut total_size = 0;
                 let messages = MailDir::list_messages(username);
-                println!("{} messages", messages.len());
-                StatusIndicator::Ok(format!("{} messages", messages.len()))
+                for entries in messages {
+                    for message in entries {
+                        resp.push_str(&format!("{} {}\r\n", count, message.size));
+                        count += 1;
+                        total_size += message.size;
+                    }
+                }
+                resp.push_str(".");
+                let resp = format!("{} messages ({} octets)\r\n{}", count, total_size, resp);
+                StatusIndicator::Ok(resp)
             }
             _ => StatusIndicator::Err("Session not in Transaction state ".to_string()),
         },
