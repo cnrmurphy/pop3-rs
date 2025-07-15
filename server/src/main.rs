@@ -22,6 +22,7 @@ const PORT: u16 = 110;
 pub struct Session {
     state: SessionState,
     mailbox_lock: Option<MailboxLock>,
+    maildir: Option<MailDir>,
 }
 
 pub struct SessionManager {
@@ -126,6 +127,7 @@ async fn process(
     let mut session = Session {
         state: SessionState::Authorization,
         mailbox_lock: None,
+        maildir: None,
     };
     let mut line = String::new();
 
@@ -189,11 +191,18 @@ fn handle_command(
                         match session_manager
                             .try_lock_mailbox(username, Arc::clone(session_manager))
                         {
-                            Ok(lock) => {
-                                session.state = SessionState::Transaction(username.to_string());
-                                session.mailbox_lock = Some(lock);
-                                StatusIndicator::Ok("Pass accepted".to_string())
-                            }
+                            Ok(lock) => match MailDir::new(&username) {
+                                Ok(maildir) => {
+                                    session.mailbox_lock = Some(lock);
+                                    session.maildir = Some(maildir);
+                                    session.state = SessionState::Transaction(username.to_string());
+                                    StatusIndicator::Ok("Pass accepted".to_string())
+                                }
+                                Err(e) => StatusIndicator::Err(format!(
+                                    "Failed to access mailbox: {}",
+                                    e.to_string()
+                                )),
+                            },
                             Err(_) => StatusIndicator::Err("Mailbox already in use".to_string()),
                         }
                     }
@@ -206,21 +215,29 @@ fn handle_command(
             _ => StatusIndicator::Err("No username set - send USER first".to_string()),
         },
         Command::List => match &session.state {
-            SessionState::Transaction(username) => {
+            SessionState::Transaction(_) => {
                 let mut resp = String::new();
                 let mut count = 1;
                 let mut total_size = 0;
-                let messages = MailDir::list_messages(username);
-                for entries in messages {
-                    for message in entries {
-                        resp.push_str(&format!("{} {}\r\n", count, message.size));
-                        count += 1;
-                        total_size += message.size;
-                    }
+                let maildir = session.maildir.as_ref().unwrap();
+                let messages = maildir.list_messages();
+                for message in messages {
+                    resp.push_str(&format!("{} {}\r\n", count, message.size));
+                    count += 1;
+                    total_size += message.size;
                 }
                 resp.push_str(".");
                 let resp = format!("{} messages ({} octets)\r\n{}", count, total_size, resp);
                 StatusIndicator::Ok(resp)
+            }
+            _ => StatusIndicator::Err("Session not in Transaction state ".to_string()),
+        },
+        Command::Retr(message_id) => match &session.state {
+            SessionState::Transaction(_) => {
+                match session.maildir.as_ref().unwrap().read_message(message_id) {
+                    Ok(msg) => StatusIndicator::Ok(msg),
+                    Err(e) => StatusIndicator::Err(format!("{}", e.to_string())),
+                }
             }
             _ => StatusIndicator::Err("Session not in Transaction state ".to_string()),
         },

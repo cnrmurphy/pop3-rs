@@ -27,6 +27,7 @@ pub enum Command {
     Quit,
     User(String),
     List,
+    Retr(u64),
 }
 
 impl Command {
@@ -39,6 +40,15 @@ impl Command {
             },
             Some("PASS") => match parts.get(1) {
                 Some(password) => Ok(Command::Pass(password.to_string())),
+                None => Err(StatusIndicator::Err("PASS requires password".to_string())),
+            },
+            Some("RETR") => match parts.get(1) {
+                Some(message_id) => match message_id.parse::<u64>() {
+                    Ok(id) => Ok(Command::Retr(id)),
+                    Err(e) => Err(StatusIndicator::Err(
+                        format!("error parsing ID: {}", e.to_string()).to_string(),
+                    )),
+                },
                 None => Err(StatusIndicator::Err("USER requires username".to_string())),
             },
             Some("APOP") => Ok(Command::Apop),
