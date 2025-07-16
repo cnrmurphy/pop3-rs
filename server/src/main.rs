@@ -229,7 +229,10 @@ fn handle_command(
                     resp.push_str(&format!("{} {}\r\n", &message.id, message.size));
                     octects += message.size;
                 }
-                let total = &messages.len() - session.messages_marked_for_deletion.len();
+                let mut total = messages.len();
+                if total > 0 {
+                    total = total - session.messages_marked_for_deletion.len();
+                }
                 resp.push_str(".");
                 let resp = format!("{} messages ({} octets)\r\n{}", total, octects, resp);
                 StatusIndicator::Ok(resp)
@@ -253,6 +256,11 @@ fn handle_command(
         },
         Command::Dele(message_id) => match &session.state {
             SessionState::Transaction(_) => {
+                let maildir = session.maildir.as_ref().unwrap();
+                let messages = maildir.list_messages();
+                if message_id > messages.len() as u64 {
+                    return StatusIndicator::Err("message does not exist".to_string());
+                }
                 if session.messages_marked_for_deletion.insert(message_id) {
                     return StatusIndicator::Ok(format!("message {} deleted", message_id));
                 }
