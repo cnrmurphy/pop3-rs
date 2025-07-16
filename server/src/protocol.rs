@@ -28,6 +28,7 @@ pub enum Command {
     User(String),
     List,
     Retr(u64),
+    Dele(u64),
 }
 
 impl Command {
@@ -49,7 +50,16 @@ impl Command {
                         format!("error parsing ID: {}", e.to_string()).to_string(),
                     )),
                 },
-                None => Err(StatusIndicator::Err("USER requires username".to_string())),
+                None => Err(StatusIndicator::Err("RETR requires mail id".to_string())),
+            },
+            Some("DELE") => match parts.get(1) {
+                Some(message_id) => match message_id.parse::<u64>() {
+                    Ok(id) => Ok(Command::Dele(id)),
+                    Err(e) => Err(StatusIndicator::Err(
+                        format!("error parsing ID: {}", e.to_string()).to_string(),
+                    )),
+                },
+                None => Err(StatusIndicator::Err("DELE requires mail id".to_string())),
             },
             Some("APOP") => Ok(Command::Apop),
             Some("NOOP") => Ok(Command::Noop),
