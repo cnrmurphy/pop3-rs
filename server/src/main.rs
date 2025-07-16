@@ -3,7 +3,7 @@ pub mod maildir;
 pub mod protocol;
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     sync::{Arc, Mutex},
 };
 
@@ -23,6 +23,7 @@ pub struct Session {
     state: SessionState,
     mailbox_lock: Option<MailboxLock>,
     maildir: Option<MailDir>,
+    messages_marked_for_deletion: HashSet<u64>,
 }
 
 pub struct SessionManager {
@@ -128,6 +129,7 @@ async fn process(
         state: SessionState::Authorization,
         mailbox_lock: None,
         maildir: None,
+        messages_marked_for_deletion: HashSet::new(),
     };
     let mut line = String::new();
 
@@ -217,28 +219,34 @@ fn handle_command(
         Command::List => match &session.state {
             SessionState::Transaction(_) => {
                 let mut resp = String::new();
-                let mut count = 0;
-                let mut total_size = 0;
+                let mut octects = 0;
                 let maildir = session.maildir.as_ref().unwrap();
                 let messages = maildir.list_messages();
                 for message in &messages {
-                    count += 1;
-                    resp.push_str(&format!("{} {}\r\n", count, message.size));
-                    total_size += message.size;
+                    if session.messages_marked_for_deletion.contains(&message.id) {
+                        continue;
+                    }
+                    resp.push_str(&format!("{} {}\r\n", &message.id, message.size));
+                    octects += message.size;
+                }
+                let mut total = messages.len();
+                if total > 0 {
+                    total = total - session.messages_marked_for_deletion.len();
                 }
                 resp.push_str(".");
-                let resp = format!(
-                    "{} messages ({} octets)\r\n{}",
-                    messages.len(),
-                    total_size,
-                    resp
-                );
+                let resp = format!("{} messages ({} octets)\r\n{}", total, octects, resp);
                 StatusIndicator::Ok(resp)
             }
             _ => StatusIndicator::Err("Session not in Transaction state ".to_string()),
         },
         Command::Retr(message_id) => match &session.state {
             SessionState::Transaction(_) => {
+                if session.messages_marked_for_deletion.contains(&message_id) {
+                    return StatusIndicator::Err(format!(
+                        "message {} already deleted",
+                        &message_id
+                    ));
+                }
                 match session.maildir.as_ref().unwrap().read_message(message_id) {
                     Ok(msg) => StatusIndicator::Ok(msg),
                     Err(e) => StatusIndicator::Err(format!("{}", e.to_string())),
@@ -248,15 +256,15 @@ fn handle_command(
         },
         Command::Dele(message_id) => match &session.state {
             SessionState::Transaction(_) => {
-                match &session
-                    .maildir
-                    .as_mut()
-                    .unwrap()
-                    .mark_message_for_deletion(message_id)
-                {
-                    Ok(resp) => StatusIndicator::Ok(resp.to_string()),
-                    Err(e) => StatusIndicator::Err(e.to_string()),
+                let maildir = session.maildir.as_ref().unwrap();
+                let messages = maildir.list_messages();
+                if message_id > messages.len() as u64 {
+                    return StatusIndicator::Err("message does not exist".to_string());
                 }
+                if session.messages_marked_for_deletion.insert(message_id) {
+                    return StatusIndicator::Ok(format!("message {} deleted", message_id));
+                }
+                StatusIndicator::Err(format!("message {} already deleted", &message_id))
                 /*
                                 match &session.maildir.as_mut().unwrap().cache.get_mut(&message_id) {
                                     Some(msg) => {
@@ -275,7 +283,10 @@ fn handle_command(
             }
             _ => StatusIndicator::Err("Session not in Transaction state ".to_string()),
         },
-        Command::Noop => StatusIndicator::Ok("NOOP".to_string()),
+        Command::Noop => match session.state {
+            SessionState::Transaction(_) => StatusIndicator::Ok("NOOP".to_string()),
+            _ => StatusIndicator::Err("Session not in Transaction state ".to_string()),
+        },
         Command::Quit => {
             // Only when the session state is in the TRANSACTION state does the state need to be
             // set to the UPDATE state when the QUIT command is issued!
