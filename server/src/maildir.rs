@@ -65,35 +65,21 @@ impl MailDir {
 
     pub fn read_message(&self, id: u64) -> Result<String, MailDirError> {
         match self.cache.get(&id) {
-            Some(entry) => {
-                if entry.marked_for_deletion {
-                    return Err(MailDirError::MailEntryNotFound(format!(
-                        "message {} already deleted",
-                        entry.id
-                    )));
-                }
-                match fs::read_to_string(&entry.path) {
-                    Ok(mail_content) => Ok(mail_content),
-                    Err(e) => Err(MailDirError::IoError(e)),
-                }
-            }
+            Some(entry) => match fs::read_to_string(&entry.path) {
+                Ok(mail_content) => Ok(mail_content),
+                Err(e) => Err(MailDirError::IoError(e)),
+            },
             None => Err(MailDirError::MailEntryNotFound(
                 "mail entry not in cache".to_string(),
             )),
         }
     }
 
-    pub fn mark_message_for_deletion(&mut self, id: u64) -> Result<String, MailDirError> {
-        match self.cache.get_mut(&id) {
+    pub fn delete_message(&self, id: &u64) -> Result<bool, MailDirError> {
+        match self.cache.get(id) {
             Some(entry) => {
-                if entry.marked_for_deletion {
-                    return Err(MailDirError::MailEntryNotFound(format!(
-                        "message {} already deleted",
-                        entry.id
-                    )));
-                }
-                entry.marked_for_deletion = true;
-                Ok(format!("message {} deleted", &id))
+                fs::remove_file(&entry.path)?;
+                Ok(true)
             }
             None => Err(MailDirError::MailEntryNotFound(
                 "mail entry not in cache".to_string(),
@@ -107,7 +93,6 @@ pub struct MailEntry {
     pub path: PathBuf,
     pub size: u64,
     pub filename: String,
-    pub marked_for_deletion: bool,
 }
 
 pub fn scan_dir(dir: &Path) -> std::io::Result<Vec<MailEntry>> {
@@ -125,7 +110,6 @@ pub fn scan_dir(dir: &Path) -> std::io::Result<Vec<MailEntry>> {
                 path,
                 size,
                 filename,
-                marked_for_deletion: false,
             });
             id += 1;
         }

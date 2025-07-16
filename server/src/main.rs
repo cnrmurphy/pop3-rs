@@ -293,6 +293,26 @@ fn handle_command(
             match &session.state {
                 SessionState::Transaction(username) => {
                     session.state = SessionState::Update(username.to_string());
+                    if !session.messages_marked_for_deletion.is_empty() {
+                        let maildir = session.maildir.as_ref().unwrap();
+                        let message_ids: Vec<&u64> =
+                            session.messages_marked_for_deletion.iter().collect();
+                        let mut failed_to_delete = 0;
+                        for id in message_ids {
+                            match maildir.delete_message(id) {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    println!("{}", e);
+                                    failed_to_delete += 1;
+                                }
+                            }
+                        }
+                        if failed_to_delete > 0 {
+                            return StatusIndicator::Err(
+                                "some deleted messages not removed".to_string(),
+                            );
+                        }
+                    }
                     StatusIndicator::Ok("Bye!".to_string())
                 }
                 _ => StatusIndicator::Ok("Bye!".to_string()),
