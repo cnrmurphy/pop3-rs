@@ -275,7 +275,10 @@ fn handle_command(
             }
             _ => StatusIndicator::Err("Session not in Transaction state ".to_string()),
         },
-        Command::Noop => StatusIndicator::Ok("NOOP".to_string()),
+        Command::Noop => match session.state {
+            SessionState::Transaction(_) => StatusIndicator::Ok("NOOP".to_string()),
+            _ => StatusIndicator::Err("Session not in Transaction state ".to_string()),
+        },
         Command::Quit => {
             // Only when the session state is in the TRANSACTION state does the state need to be
             // set to the UPDATE state when the QUIT command is issued!
