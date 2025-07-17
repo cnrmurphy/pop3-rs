@@ -219,7 +219,6 @@ fn handle_command(
         Command::List => match &session.state {
             SessionState::Transaction(_) => {
                 let mut resp = String::new();
-                let mut octects = 0;
                 let maildir = session.maildir.as_ref().unwrap();
                 let messages = maildir.list_messages();
                 for message in &messages {
@@ -227,14 +226,15 @@ fn handle_command(
                         continue;
                     }
                     resp.push_str(&format!("{} {}\r\n", &message.id, message.size));
-                    octects += message.size;
                 }
                 let mut total = messages.len();
                 if total > 0 {
                     total = total - session.messages_marked_for_deletion.len();
                 }
-                resp.push_str(".");
-                let resp = format!("{} messages ({} octets)\r\n{}", total, octects, resp);
+                let resp = format!(
+                    "{} messages ({} octets)\r\n{}.",
+                    total, maildir.total_octets, resp
+                );
                 StatusIndicator::Ok(resp)
             }
             _ => StatusIndicator::Err("Session not in Transaction state ".to_string()),
@@ -248,7 +248,7 @@ fn handle_command(
                     ));
                 }
                 match session.maildir.as_ref().unwrap().read_message(message_id) {
-                    Ok(msg) => StatusIndicator::Ok(msg),
+                    Ok(msg) => StatusIndicator::Ok(format!("{}.", msg)),
                     Err(e) => StatusIndicator::Err(format!("{}", e.to_string())),
                 }
             }
@@ -265,21 +265,20 @@ fn handle_command(
                     return StatusIndicator::Ok(format!("message {} deleted", message_id));
                 }
                 StatusIndicator::Err(format!("message {} already deleted", &message_id))
-                /*
-                                match &session.maildir.as_mut().unwrap().cache.get_mut(&message_id) {
-                                    Some(msg) => {
-                                        if msg.marked_for_deletion {
-                                            return StatusIndicator::Err(format!(
-                                                "message {} already deleted",
-                                                &message_id
-                                            ));
-                                        }
-                                        msg.marked_for_deletion = true;
-                                        return StatusIndicator::Ok(format!("message {} deleted", &message_id));
-                                    }
-                                    None => StatusIndicator::Err(format!("message {} not found", &message_id)),
-                                }
-                */
+            }
+            _ => StatusIndicator::Err("Session not in Transaction state ".to_string()),
+        },
+        Command::Rset => match &session.state {
+            SessionState::Transaction(_) => {
+                let maildir = session.maildir.as_ref().unwrap();
+                let messages = maildir.list_messages();
+                session.messages_marked_for_deletion.clear();
+                let resp = format!(
+                    "{} messages ({} octets)",
+                    messages.len(),
+                    maildir.total_octets,
+                );
+                StatusIndicator::Ok(resp)
             }
             _ => StatusIndicator::Err("Session not in Transaction state ".to_string()),
         },

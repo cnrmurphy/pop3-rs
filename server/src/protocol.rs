@@ -29,6 +29,7 @@ pub enum Command {
     List,
     Retr(u64),
     Dele(u64),
+    Rset,
 }
 
 impl Command {
@@ -61,6 +62,7 @@ impl Command {
                 },
                 None => Err(StatusIndicator::Err("DELE requires mail id".to_string())),
             },
+            Some("RSET") => Ok(Command::Rset),
             Some("APOP") => Ok(Command::Apop),
             Some("NOOP") => Ok(Command::Noop),
             Some("LIST") => Ok(Command::List),

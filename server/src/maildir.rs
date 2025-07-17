@@ -30,6 +30,7 @@ pub struct MailDir {
     // minor nuance that pop3 expects 1-based indexing and Vec is 0-based indexing makes me lean
     // toward using an ordered map to simplify things
     pub cache: BTreeMap<u64, MailEntry>,
+    pub total_octets: u64,
 }
 
 impl MailDir {
@@ -42,6 +43,7 @@ impl MailDir {
             mailbox_new: path_new,
             mailbox_cur: path_cur,
             cache: BTreeMap::new(),
+            total_octets: 0,
         };
         maildir.refresh_cache();
         Ok(maildir)
@@ -51,6 +53,7 @@ impl MailDir {
         let mut cache = BTreeMap::new();
         let entries = self.list_messages();
         for entry in entries {
+            self.total_octets += entry.size;
             Some(cache.insert(entry.id, entry));
         }
         self.cache = cache;
