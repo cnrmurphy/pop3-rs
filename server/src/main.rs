@@ -220,16 +220,13 @@ fn handle_command(
             SessionState::Transaction(_) => {
                 let mut resp = String::new();
                 let maildir = session.maildir.as_ref().unwrap();
-                let messages = maildir.list_messages();
-                for message in &messages {
-                    if session.messages_marked_for_deletion.contains(&message.id) {
+                let mut total = 0;
+                for (id, entry) in &maildir.cache {
+                    if session.messages_marked_for_deletion.contains(id) {
                         continue;
                     }
-                    resp.push_str(&format!("{} {}\r\n", &message.id, message.size));
-                }
-                let mut total = messages.len();
-                if total > 0 {
-                    total = total - session.messages_marked_for_deletion.len();
+                    resp.push_str(&format!("{} {}\r\n", id, entry.size));
+                    total += 1;
                 }
                 let resp = format!(
                     "{} messages ({} octets)\r\n{}.",
@@ -257,8 +254,7 @@ fn handle_command(
         Command::Dele(message_id) => match &session.state {
             SessionState::Transaction(_) => {
                 let maildir = session.maildir.as_ref().unwrap();
-                let messages = maildir.list_messages();
-                if message_id > messages.len() as u64 {
+                if !maildir.cache.contains_key(&message_id) {
                     return StatusIndicator::Err("message does not exist".to_string());
                 }
                 if session.messages_marked_for_deletion.insert(message_id) {
@@ -271,11 +267,10 @@ fn handle_command(
         Command::Rset => match &session.state {
             SessionState::Transaction(_) => {
                 let maildir = session.maildir.as_ref().unwrap();
-                let messages = maildir.list_messages();
                 session.messages_marked_for_deletion.clear();
                 let resp = format!(
                     "{} messages ({} octets)",
-                    messages.len(),
+                    maildir.cache.len(),
                     maildir.total_octets,
                 );
                 StatusIndicator::Ok(resp)
