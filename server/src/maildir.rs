@@ -51,6 +51,7 @@ impl MailDir {
 
     pub fn refresh_cache(&mut self) {
         let mut cache = BTreeMap::new();
+        self.total_octets = 0;
         let entries = self.list_messages();
         for entry in entries {
             self.total_octets += entry.size;
