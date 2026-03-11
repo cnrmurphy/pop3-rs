@@ -97,6 +97,7 @@ pub struct MailEntry {
     pub path: PathBuf,
     pub size: u64,
     pub filename: String,
+    pub uidl: String,
 }
 
 pub fn scan_dir(dir: &Path) -> std::io::Result<Vec<MailEntry>> {
@@ -109,11 +110,13 @@ pub fn scan_dir(dir: &Path) -> std::io::Result<Vec<MailEntry>> {
             let metadata = fs::metadata(&path)?;
             let size = metadata.len();
             let filename = e.file_name().into_string().unwrap_or_default();
+            let uidl = filename.split(':').next().unwrap_or(&filename).to_string();
             mail_entries.push(MailEntry {
                 id,
                 path,
                 size,
                 filename,
+                uidl,
             });
             id += 1;
         }

@@ -30,6 +30,7 @@ pub enum Command {
     Retr(u64),
     Dele(u64),
     Rset,
+    Uidl(Option<u64>),
 }
 
 impl Command {
@@ -61,6 +62,15 @@ impl Command {
                     )),
                 },
                 None => Err(StatusIndicator::Err("DELE requires mail id".to_string())),
+            },
+            Some("UIDL") => match parts.get(1) {
+                Some(message_id) => match message_id.parse::<u64>() {
+                    Ok(id) => Ok(Command::Uidl(Some(id))),
+                    Err(e) => Err(StatusIndicator::Err(
+                        format!("error parsing ID: {}", e).to_string(),
+                    )),
+                },
+                None => Ok(Command::Uidl(None)),
             },
             Some("RSET") => Ok(Command::Rset),
             Some("APOP") => Ok(Command::Apop),

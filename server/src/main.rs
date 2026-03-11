@@ -277,6 +277,36 @@ fn handle_command(
             }
             _ => StatusIndicator::Err("Session not in Transaction state ".to_string()),
         },
+        Command::Uidl(msg_id) => match &session.state {
+            SessionState::Transaction(_) => {
+                let maildir = session.maildir.as_ref().unwrap();
+                match msg_id {
+                    Some(id) => {
+                        if session.messages_marked_for_deletion.contains(&id) {
+                            return StatusIndicator::Err(format!(
+                                "message {} already deleted",
+                                id
+                            ));
+                        }
+                        match maildir.cache.get(&id) {
+                            Some(entry) => StatusIndicator::Ok(format!("{} {}", id, entry.uidl)),
+                            None => StatusIndicator::Err("no such message".to_string()),
+                        }
+                    }
+                    None => {
+                        let mut resp = String::new();
+                        for (id, entry) in &maildir.cache {
+                            if session.messages_marked_for_deletion.contains(id) {
+                                continue;
+                            }
+                            resp.push_str(&format!("{} {}\r\n", id, entry.uidl));
+                        }
+                        StatusIndicator::Ok(format!("\r\n{}.", resp))
+                    }
+                }
+            }
+            _ => StatusIndicator::Err("Session not in Transaction state ".to_string()),
+        },
         Command::Noop => match session.state {
             SessionState::Transaction(_) => StatusIndicator::Ok("NOOP".to_string()),
             _ => StatusIndicator::Err("Session not in Transaction state ".to_string()),
