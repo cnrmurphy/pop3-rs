@@ -62,9 +62,10 @@ impl MailDir {
 
     pub fn list_messages(&self) -> Vec<MailEntry> {
         let mut mail_entries = Vec::new();
-        mail_entries.extend(scan_dir(&self.mailbox_new).into_iter());
-        mail_entries.extend(scan_dir(&self.mailbox_cur).into_iter());
-        return mail_entries.into_iter().flatten().collect();
+        let mut next_id = 1;
+        next_id = scan_dir(&self.mailbox_new, next_id, &mut mail_entries);
+        scan_dir(&self.mailbox_cur, next_id, &mut mail_entries);
+        mail_entries
     }
 
     pub fn read_message(&self, id: u64) -> Result<String, MailDirError> {
@@ -100,18 +101,23 @@ pub struct MailEntry {
     pub uidl: String,
 }
 
-pub fn scan_dir(dir: &Path) -> std::io::Result<Vec<MailEntry>> {
-    let mut mail_entries = Vec::new();
-    let mut id = 1;
-    for entry in fs::read_dir(dir)? {
-        let e = entry?;
+fn scan_dir(dir: &Path, start_id: u64, entries: &mut Vec<MailEntry>) -> u64 {
+    let mut id = start_id;
+    let read_dir = match fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(_) => return id,
+    };
+    for entry in read_dir {
+        let e = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
         let path = e.path();
         if path.is_file() {
-            let metadata = fs::metadata(&path)?;
-            let size = metadata.len();
+            let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             let filename = e.file_name().into_string().unwrap_or_default();
             let uidl = filename.split(':').next().unwrap_or(&filename).to_string();
-            mail_entries.push(MailEntry {
+            entries.push(MailEntry {
                 id,
                 path,
                 size,
@@ -121,6 +127,5 @@ pub fn scan_dir(dir: &Path) -> std::io::Result<Vec<MailEntry>> {
             id += 1;
         }
     }
-
-    Ok(mail_entries)
+    id
 }
