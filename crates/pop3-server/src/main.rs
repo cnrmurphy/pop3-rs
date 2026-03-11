@@ -1,5 +1,3 @@
-pub mod auth;
-pub mod maildir;
 pub mod protocol;
 
 use std::{
@@ -13,16 +11,37 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
-use crate::{auth::AuthStore, maildir::MailDir};
+use auth::AuthStore;
+use maildir::{MailDir, MailEntry};
 
 pub type IOResult<T> = std::io::Result<T>;
 
-const PORT: u16 = 110;
+struct MailboxCache {
+    messages: BTreeMap<u64, MailEntry>,
+    total_octets: u64,
+}
+
+impl MailboxCache {
+    fn new(maildir: &MailDir) -> Self {
+        let entries = maildir.list_messages();
+        let mut messages = BTreeMap::new();
+        let mut total_octets = 0;
+        for (i, entry) in entries.into_iter().enumerate() {
+            let id = (i as u64) + 1;
+            total_octets += entry.size;
+            messages.insert(id, entry);
+        }
+        Self {
+            messages,
+            total_octets,
+        }
+    }
+}
 
 pub struct Session {
     state: SessionState,
     mailbox_lock: Option<MailboxLock>,
-    maildir: Option<MailDir>,
+    cache: Option<MailboxCache>,
     messages_marked_for_deletion: HashSet<u64>,
 }
 
@@ -76,14 +95,13 @@ async fn main() {
     let args: Vec<String> = std::env::args().collect();
     let db = sled::open("my_db").unwrap();
 
-    // TODO: we might want to implement an independent helper cli at some point
     if args.len() >= 2 && args[1] == "add-user" {
         if args.len() != 4 {
             eprintln!("Usage: {} add-user <username> <password>", args[0]);
             std::process::exit(1);
         }
 
-        let auth_store = auth::AuthStore::new(db);
+        let auth_store = AuthStore::new(db);
 
         match auth_store.create_user(&args[2], &args[3]) {
             Ok(true) => {
@@ -96,7 +114,7 @@ async fn main() {
         return;
     }
 
-    let auth = Arc::new(auth::AuthStore::new(db));
+    let auth = Arc::new(AuthStore::new(db));
     let session_manager = Arc::new(SessionManager::new());
     let listener = TcpListener::bind("127.0.0.1:1110").await.unwrap();
 
@@ -128,7 +146,7 @@ async fn process(
     let mut session = Session {
         state: SessionState::Authorization,
         mailbox_lock: None,
-        maildir: None,
+        cache: None,
         messages_marked_for_deletion: HashSet::new(),
     };
     let mut line = String::new();
@@ -195,14 +213,16 @@ fn handle_command(
                         {
                             Ok(lock) => match MailDir::new(&username) {
                                 Ok(maildir) => {
+                                    let cache = MailboxCache::new(&maildir);
                                     session.mailbox_lock = Some(lock);
-                                    session.maildir = Some(maildir);
-                                    session.state = SessionState::Transaction(username.to_string());
+                                    session.cache = Some(cache);
+                                    session.state =
+                                        SessionState::Transaction(username.to_string());
                                     StatusIndicator::Ok("Pass accepted".to_string())
                                 }
                                 Err(e) => StatusIndicator::Err(format!(
                                     "Failed to access mailbox: {}",
-                                    e.to_string()
+                                    e
                                 )),
                             },
                             Err(_) => StatusIndicator::Err("Mailbox already in use".to_string()),
@@ -218,10 +238,10 @@ fn handle_command(
         },
         Command::List => match &session.state {
             SessionState::Transaction(_) => {
+                let cache = session.cache.as_ref().unwrap();
                 let mut resp = String::new();
-                let maildir = session.maildir.as_ref().unwrap();
                 let mut total = 0;
-                for (id, entry) in &maildir.cache {
+                for (id, entry) in &cache.messages {
                     if session.messages_marked_for_deletion.contains(id) {
                         continue;
                     }
@@ -230,7 +250,7 @@ fn handle_command(
                 }
                 let resp = format!(
                     "{} messages ({} octets)\r\n{}.",
-                    total, maildir.total_octets, resp
+                    total, cache.total_octets, resp
                 );
                 StatusIndicator::Ok(resp)
             }
@@ -244,17 +264,21 @@ fn handle_command(
                         &message_id
                     ));
                 }
-                match session.maildir.as_ref().unwrap().read_message(message_id) {
-                    Ok(msg) => StatusIndicator::Ok(format!("{}.", msg)),
-                    Err(e) => StatusIndicator::Err(format!("{}", e.to_string())),
+                let cache = session.cache.as_ref().unwrap();
+                match cache.messages.get(&message_id) {
+                    Some(entry) => match entry.read() {
+                        Ok(msg) => StatusIndicator::Ok(format!("{}.", msg)),
+                        Err(e) => StatusIndicator::Err(format!("{}", e)),
+                    },
+                    None => StatusIndicator::Err("no such message".to_string()),
                 }
             }
             _ => StatusIndicator::Err("Session not in Transaction state ".to_string()),
         },
         Command::Dele(message_id) => match &session.state {
             SessionState::Transaction(_) => {
-                let maildir = session.maildir.as_ref().unwrap();
-                if !maildir.cache.contains_key(&message_id) {
+                let cache = session.cache.as_ref().unwrap();
+                if !cache.messages.contains_key(&message_id) {
                     return StatusIndicator::Err("message does not exist".to_string());
                 }
                 if session.messages_marked_for_deletion.insert(message_id) {
@@ -266,12 +290,12 @@ fn handle_command(
         },
         Command::Rset => match &session.state {
             SessionState::Transaction(_) => {
-                let maildir = session.maildir.as_ref().unwrap();
+                let cache = session.cache.as_ref().unwrap();
                 session.messages_marked_for_deletion.clear();
                 let resp = format!(
                     "{} messages ({} octets)",
-                    maildir.cache.len(),
-                    maildir.total_octets,
+                    cache.messages.len(),
+                    cache.total_octets,
                 );
                 StatusIndicator::Ok(resp)
             }
@@ -279,7 +303,7 @@ fn handle_command(
         },
         Command::Uidl(msg_id) => match &session.state {
             SessionState::Transaction(_) => {
-                let maildir = session.maildir.as_ref().unwrap();
+                let cache = session.cache.as_ref().unwrap();
                 match msg_id {
                     Some(id) => {
                         if session.messages_marked_for_deletion.contains(&id) {
@@ -288,14 +312,16 @@ fn handle_command(
                                 id
                             ));
                         }
-                        match maildir.cache.get(&id) {
-                            Some(entry) => StatusIndicator::Ok(format!("{} {}", id, entry.uidl)),
+                        match cache.messages.get(&id) {
+                            Some(entry) => {
+                                StatusIndicator::Ok(format!("{} {}", id, entry.uidl))
+                            }
                             None => StatusIndicator::Err("no such message".to_string()),
                         }
                     }
                     None => {
                         let mut resp = String::new();
-                        for (id, entry) in &maildir.cache {
+                        for (id, entry) in &cache.messages {
                             if session.messages_marked_for_deletion.contains(id) {
                                 continue;
                             }
@@ -312,20 +338,15 @@ fn handle_command(
             _ => StatusIndicator::Err("Session not in Transaction state ".to_string()),
         },
         Command::Quit => {
-            // Only when the session state is in the TRANSACTION state does the state need to be
-            // set to the UPDATE state when the QUIT command is issued!
             match &session.state {
                 SessionState::Transaction(username) => {
                     session.state = SessionState::Update(username.to_string());
                     if !session.messages_marked_for_deletion.is_empty() {
-                        let maildir = session.maildir.as_ref().unwrap();
-                        let message_ids: Vec<&u64> =
-                            session.messages_marked_for_deletion.iter().collect();
+                        let cache = session.cache.as_ref().unwrap();
                         let mut failed_to_delete = 0;
-                        for id in message_ids {
-                            match maildir.delete_message(id) {
-                                Ok(_) => {}
-                                Err(e) => {
+                        for id in &session.messages_marked_for_deletion {
+                            if let Some(entry) = cache.messages.get(id) {
+                                if let Err(e) = entry.delete() {
                                     println!("{}", e);
                                     failed_to_delete += 1;
                                 }

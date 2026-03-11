@@ -49,7 +49,7 @@ impl Command {
                 Some(message_id) => match message_id.parse::<u64>() {
                     Ok(id) => Ok(Command::Retr(id)),
                     Err(e) => Err(StatusIndicator::Err(
-                        format!("error parsing ID: {}", e.to_string()).to_string(),
+                        format!("error parsing ID: {}", e).to_string(),
                     )),
                 },
                 None => Err(StatusIndicator::Err("RETR requires mail id".to_string())),
@@ -58,7 +58,7 @@ impl Command {
                 Some(message_id) => match message_id.parse::<u64>() {
                     Ok(id) => Ok(Command::Dele(id)),
                     Err(e) => Err(StatusIndicator::Err(
-                        format!("error parsing ID: {}", e.to_string()).to_string(),
+                        format!("error parsing ID: {}", e).to_string(),
                     )),
                 },
                 None => Err(StatusIndicator::Err("DELE requires mail id".to_string())),

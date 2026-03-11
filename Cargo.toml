@@ -1,0 +1,7 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/maildir",
+    "crates/auth",
+    "crates/pop3-server",
+]
